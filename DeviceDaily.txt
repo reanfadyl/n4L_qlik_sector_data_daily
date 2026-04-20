@@ -1,0 +1,182 @@
+LIB CONNECT TO 'Build - MN3:Device-Level Daily';
+
+//note TO SELF there ARE SPEcial CHARACTERS IN THE schOOL NAMES WHICH ARE MESSING EVERTYTHING UP MAYbe USE id AFTERall
+
+
+////////////////////////////////////////////////////////////
+// CONFIG & BUCKET SELECTOR
+////////////////////////////////////////////////////////////
+
+//The four variables below are handled by the automation
+LET vFromDate = '2026-04-15';
+LET vToDate   = '2026-04-15';
+LET vNumberOfPages = 20;
+LET vWebsiteVisitThreshold = 10;
+
+LET vTmpQvdPath   = 'lib://DataFiles/DeviceDaily/tmp/';
+LET vDailyQvdPath = 'lib://DataFiles/DeviceDaily/';
+
+
+////////////////////////////////////////////////////////////
+// Manual Select
+////////////////////////////////////////////////////////////
+//Let vTargetBucket = Null();
+//IF Len('$(vTargetBucket)') = 0 THEN
+//    LET vTargetBucket = 3; 
+//END IF
+
+////////////////////////////////////////////////////////////
+// LOAD SCHOOLS & BUILD VALID JSON BODY
+////////////////////////////////////////////////////////////
+TRACE Processing Bucket $(vTargetBucket);
+
+SchoolsToProcess:
+
+LOAD  [_id_u3] as  [_id_u3] 
+FROM [lib://DataFiles/Config/Schools_Bucket_$(vTargetBucket).qvd] (qvd);
+
+// Step 1: Create the comma-separated list WITH inner double quotes
+// This creates: n4l-school1-fw1","n4l-school2-fw1
+Temp_Concat:
+
+LOAD  
+Concat( [_id_u3], '"",""') as ObsList RESIDENT SchoolsToProcess;
+
+LET vSchools =  Peek('ObsList', 0, 'Temp_Concat') ;
+
+
+DROP TABLES SchoolsToProcess, Temp_Concat;
+
+// Step 2: Build the full JSON Body
+// We use "" (double-double) to escape quotes within the LET statement
+// The result in vSchoolsBody will be: {"schools":["n4l-school1-fw1","n4l-school2-fw1"]}
+
+LET vSchoolsBody = '{""schools"":[""$(vSchools)""]} ';
+//LET vSchoolsBody = '{""schools"":[""n4l-maristcoll-70-867"",""n4l-sacredhear-139-2279""]}';
+
+TRACE API Body prepared for Bucket $(vTargetBucket);
+
+
+
+//////////////////////////////////////////////////////////
+// LOOP STATE
+////////////////////////////////////////////////////////////
+LET vSearchAfter = '';
+LET vBatchNo = 0;
+
+DO
+  LET vBatchNo = $(vBatchNo) + 1;
+
+  TRACE Batch $(vBatchNo) | searchAfter='$(vSearchAfter)';
+
+  IF Len(Trim('$(vSearchAfter)')) = 0 THEN
+    RestConnectorMasterTable:
+    SQL SELECT "__KEY_root", (SELECT "sessionCount", "timestamp",  "zone", "__KEY_data", "__FK_data", (SELECT "id","moeId","siteId","observer","__FK_school" FROM "school" FK "__FK_school"), (SELECT "name","__FK_application" FROM "application" FK "__FK_application"), (SELECT "value","isWeekday","__FK_date" FROM "date" FK "__FK_date"), (SELECT "action","actionTotal","__FK_firewall" FROM "firewall" FK "__FK_firewall"), (SELECT "in","out","__FK_bandwidth" FROM "bandwidth" FK "__FK_bandwidth"), (SELECT "category","name" AS "name_u0","url","__FK_website" FROM "website" FK "__FK_website"), (SELECT "type","osFamily","mac","__FK_device" FROM "device" FK "__FK_device"), (SELECT "in" AS "in_u0","out" AS "out_u0","__FK_bandwidthInGB" FROM "bandwidthInGB" FK "__FK_bandwidthInGB") FROM "data" PK "__KEY_data" FK "__FK_data"), (SELECT "total","searchAfter","__FK_meta" FROM "meta" FK "__FK_meta") FROM JSON (wrap on) "root" PK "__KEY_root"
+    WITH CONNECTION ( 
+        QUERY "fromDateTime" "$(vFromDate)", 
+        QUERY "toDateTime" "$(vToDate)", 
+        QUERY "numberOfPages" "$(vNumberOfPages)", 
+        BODY "$(vSchoolsBody)" 
+    );
+  ELSE
+    RestConnectorMasterTable:
+    SQL SELECT "__KEY_root", (SELECT "sessionCount", "timestamp",   "zone", "__KEY_data", "__FK_data", (SELECT "id","moeId","siteId","observer","__FK_school" FROM "school" FK "__FK_school"), (SELECT "name","__FK_application" FROM "application" FK "__FK_application"), (SELECT "value","isWeekday","__FK_date" FROM "date" FK "__FK_date"), (SELECT "action","actionTotal","__FK_firewall" FROM "firewall" FK "__FK_firewall"), (SELECT "in","out","__FK_bandwidth" FROM "bandwidth" FK "__FK_bandwidth"), (SELECT "category","name" AS "name_u0","url","__FK_website" FROM "website" FK "__FK_website"), (SELECT "type","osFamily","mac","__FK_device" FROM "device" FK "__FK_device"), (SELECT "in" AS "in_u0","out" AS "out_u0","__FK_bandwidthInGB" FROM "bandwidthInGB" FK "__FK_bandwidthInGB") FROM "data" PK "__KEY_data" FK "__FK_data"), (SELECT "total","searchAfter","__FK_meta" FROM "meta" FK "__FK_meta") FROM JSON (wrap on) "root" PK "__KEY_root"
+    WITH CONNECTION ( 
+        QUERY "fromDateTime" "$(vFromDate)", 
+        QUERY "toDateTime" "$(vToDate)", 
+        QUERY "numberOfPages" "$(vNumberOfPages)", 
+        QUERY "searchAfter" "$(vSearchAfter)", 
+        BODY "$(vSchoolsBody)" 
+    );
+  ENDIF
+  
+  Trace 'Body After Load' $(vSchoolsBody);
+
+  [school]: LOAD [id],[moeId],[siteId],[observer],[__FK_school] AS [__KEY_data] RESIDENT RestConnectorMasterTable WHERE NOT IsNull([__FK_school]);
+  [application]: LOAD [name],[__FK_application] AS [__KEY_data] RESIDENT RestConnectorMasterTable WHERE NOT IsNull([__FK_application]);
+  [date]: LOAD [value],[isWeekday],[__FK_date] AS [__KEY_data] RESIDENT RestConnectorMasterTable WHERE NOT IsNull([__FK_date]);
+  [firewall]: LOAD [action],[actionTotal],[__FK_firewall] AS [__KEY_data] RESIDENT RestConnectorMasterTable WHERE NOT IsNull([__FK_firewall]);
+  [bandwidth]: LOAD [in],[out],[__FK_bandwidth] AS [__KEY_data] RESIDENT RestConnectorMasterTable WHERE NOT IsNull([__FK_bandwidth]);
+  [bandwidthInGB]: LOAD [in_u0],[out_u0],[__FK_bandwidthInGB] AS [__KEY_data] RESIDENT RestConnectorMasterTable WHERE NOT IsNull([__FK_bandwidthInGB]);
+  [website]: LOAD [category],[name_u0],[url],[__FK_website] AS [__KEY_data] RESIDENT RestConnectorMasterTable WHERE NOT IsNull([__FK_website]);
+  [device]: LOAD [type],[osFamily],[mac],[__FK_device] AS [__KEY_data] RESIDENT RestConnectorMasterTable WHERE NOT IsNull([__FK_device]);
+  [data]: LOAD [sessionCount],[timestamp],[zone],[__KEY_data],[__FK_data] AS [__KEY_root] RESIDENT RestConnectorMasterTable WHERE NOT IsNull([__FK_data]);
+  [meta]: LOAD [total],[searchAfter],[__FK_meta] AS [__KEY_root] RESIDENT RestConnectorMasterTable WHERE NOT IsNull([__FK_meta]);
+
+  DROP TABLE RestConnectorMasterTable;
+
+  DeviceDaily_Flat_Batch:
+  NoConcatenate
+  LOAD __KEY_data,timestamp as timestamp_utc, sessionCount, zone RESIDENT [data];
+  LEFT JOIN (DeviceDaily_Flat_Batch) LOAD __KEY_data, id as school_id, moeId as school_moeId, siteId as school_siteId, observer as school_observer RESIDENT [school];
+  LEFT JOIN (DeviceDaily_Flat_Batch) LOAD __KEY_data, name as application_name RESIDENT [application];
+  LEFT JOIN (DeviceDaily_Flat_Batch) LOAD __KEY_data, value as date_value, isWeekday as date_isWeekday RESIDENT [date];
+  LEFT JOIN (DeviceDaily_Flat_Batch) LOAD __KEY_data, action as firewall_action, actionTotal as firewall_actionTotal RESIDENT [firewall];
+  LEFT JOIN (DeviceDaily_Flat_Batch) LOAD __KEY_data, in as bandwidth_in, out as bandwidth_out RESIDENT [bandwidth];
+  LEFT JOIN (DeviceDaily_Flat_Batch) LOAD __KEY_data, category as website_category, name_u0 as website_name, url as website_url RESIDENT [website];
+  LEFT JOIN (DeviceDaily_Flat_Batch) LOAD __KEY_data, type as device_type, osFamily as device_osFamily, mac as device_mac RESIDENT [device];
+  LEFT JOIN (DeviceDaily_Flat_Batch) LOAD __KEY_data, in_u0 as bandwidthInGB_in, out_u0 as bandwidthInGB_out RESIDENT [bandwidthInGB];
+
+  STORE DeviceDaily_Flat_Batch INTO [$(vTmpQvdPath)DeviceDaily_$(vFromDate)_Bucket$(vTargetBucket)_b$(vBatchNo).qvd] (qvd);
+
+  DROP TABLE DeviceDaily_Flat_Batch;
+  DROP TABLES [school],[application],[date],[firewall],[bandwidth],[website],[device],[bandwidthInGB],[data];
+
+  MetaTmp: NoConcatenate LOAD DISTINCT total, searchAfter RESIDENT [meta];
+  LET vNextSearchAfter = Peek('searchAfter', 0, 'MetaTmp');
+  DROP TABLES MetaTmp, [meta];
+
+  LET vSearchAfter = '$(vNextSearchAfter)';
+  IF Len(Trim('$(vSearchAfter)')) = 0 OR '$(vSearchAfter)'='null' THEN
+      EXIT DO;
+  ENDIF
+LOOP
+
+////////////////////////////////////////////////////////////
+// CONSOLIDATE BUCKET DATA (Forced Stacking)
+////////////////////////////////////////////////////////////
+TRACE >>> Consolidating all $(vBatchNo) batches for Bucket $(vTargetBucket);
+
+Temp_Consolidated:
+NoConcatenate
+LOAD * FROM [$(vTmpQvdPath)DeviceDaily_$(vFromDate)_Bucket$(vTargetBucket)_b1.qvd] (qvd);
+
+FOR i = 2 TO $(vBatchNo)
+    CONCATENATE (Temp_Consolidated)
+    LOAD * FROM [$(vTmpQvdPath)DeviceDaily_$(vFromDate)_Bucket$(vTargetBucket)_b$(i).qvd] (qvd);
+NEXT i
+
+// Final Audit Field
+Temp_Consolidated_Full:
+NoConcatenate
+LOAD *, website_name AS website_name_orig RESIDENT Temp_Consolidated;
+DROP TABLE Temp_Consolidated;
+
+Temp_WebsiteTotals:
+LOAD website_name_orig as website_name, Sum(sessionCount) as total_site_sessions
+RESIDENT Temp_Consolidated_Full GROUP BY website_name_orig;
+
+Map_WebsiteCleanup:
+MAPPING LOAD website_name, 'Other'
+RESIDENT Temp_WebsiteTotals WHERE total_site_sessions <= 10; 
+
+//'$(vWebsiteVisitThreshold)';
+
+DROP TABLE Temp_WebsiteTotals; 
+
+Daily_DeviceDaily:
+NoConcatenate
+LOAD
+    ApplyMap('Map_WebsiteCleanup', website_name_orig, website_name_orig) as website_name,
+    timestamp_utc, sessionCount, school_id, school_moeId, school_siteId, school_observer,
+    application_name, date_value, date_isWeekday, firewall_action, firewall_actionTotal,
+    bandwidth_in, bandwidth_out, website_category
+    //, website_url
+    , device_type, 
+    device_osFamily, device_mac, bandwidthInGB_in, bandwidthInGB_out, zone
+RESIDENT Temp_Consolidated_Full;
+
+DROP TABLE Temp_Consolidated_Full;
+
+STORE Daily_DeviceDaily INTO [$(vDailyQvdPath)DeviceDaily_$(vFromDate)_Bucket$(vTargetBucket)_Consolidated.qvd] (qvd);
+DROP TABLE Daily_DeviceDaily;
